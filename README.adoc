@@ -1,17 +1,17 @@
 = WordPress on PCF
 
-this is a walkthrough of running wordpress on PCF.
+This is a walkthrough of running wordpress on PCF.
 
 == Method 1
 
- this method uses the AWS service broker(RDS), redis for caching and EFS for file storage. 
+This method uses the AWS service broker(RDS), redis for caching and EFS for file storage. 
 
-follow the step by step guide link:docs.adoc[here].
+Follow the step by step guide link:docs.adoc[here].
 
 == Method 2
 
- this method uses the AWS service broker(RDS), redis for caching Aws service broker(s3) foruser content object storage and wpcomposer to install plugins.
+This method uses the AWS service broker(RDS), redis for caching Aws service broker(s3) foruser content object storage and wpcomposer to install plugins.
 
- this method would have better performance over nfs and would allow for continous delivery.
+This method should have better performance over nfs and will allow for continous delivery.
 
-follow the step by step guide link:docs-improved.adoc[here].
+Follow the step by step guide link:docs-improved.adoc[here].
