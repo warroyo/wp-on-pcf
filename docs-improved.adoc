@@ -1,0 +1,236 @@
+= Step by Step Guide to Wordpress on PCF
+
+== PCF requirements
+
+* PCF foundation
+* redis for PCF
+* AWS Service Broker
+* Volume service
+
+
+== other requirements
+
+* EFS filestore setup
+* CF CLI
+
+
+
+== Steps
+
+All steps assume that the previous requirements have been met and you have a working PCF installation with an org and space.
+
+. create a NFS volume service for your EFS file store
+
+----
+cf create-service nfs Existing wordpress-files -c '{"share":"fs-fjjfi88.efs.us-west-2.amazonaws.com/", "version":"4.1"}'
+----
+
+[start=2]
+. create a mysql service in AWS using aws service broker, the accessCidr may change based on you vpc
+----
+cf create-service rdsmysql dev wordpress-db -c '{"VpcId": "vpc-<id>","AccessCidr":"10.0.0.0/16"}'
+----
+
+[start=3]
+. create a redis service for the cache
+----
+cf create-service p-redis shared-vm wordpress-cache
+----
+
+[start=4]
+. download the latest wordpress codebase and unzip it
+----
+curl -O https://wordpress.org/latest.zip
+unzip latest.zip
+rm latest.zip
+----
+
+
+[start=5]
+. create a manifest file for pcf in your working directory, not in the WP folder
+----
+cat << EOF > /tmp/yourfilehere
+---
+applications:
+- name: wordpress
+  memory: 128M
+  path: .
+  services:
+  - wordpress-db
+  - wordpress-files
+  - wordpress-cache
+  timeout: 300
+EOF
+----
+
+[start=6]
+. modify the `wp-config.php` to add a line to read our VCAP service environment vars. add the below line near the top of the file.
+----
+// ** Read MySQL service properties from _ENV['VCAP_SERVICES']
+$services = json_decode($_ENV['VCAP_SERVICES'], true);
+----
+
+
+[start=7]
+. replace the existing mysql template in `wp-config.php` with the following lines. this will pull the connection info from our environment.
+----
+$mysql_service = $services['rdsmysql'][0]; // pick the first MySQL service
+
+// ** MySQL settings - You can get this info from your web host ** //
+/** The name of the database for WordPress */
+define('DB_NAME', $mysql_service['credentials']['DB_NAME']);
+
+/** MySQL database username */
+define('DB_USER', $mysql_service['credentials']['MASTER_USERNAME']);
+
+/** MySQL database password */
+define('DB_PASSWORD', $mysql_service['credentials']['MASTER_PASSWORD']);
+
+/** MySQL hostname */
+define('DB_HOST', $mysql_service['credentials']['ENDPOINT_ADDRESS'] . ':' . $mysql_service['credentials']['PORT']);
+
+/** Database Charset to use in creating database tables. */
+define('DB_CHARSET', 'utf8');
+
+/** The Database Collate type. Don't change this if in doubt. */
+define('DB_COLLATE', '');
+----
+
+
+[start=7]
+. next we need to tell the buildpack which PHP extensions to install. we do that by adding the below directories and file to our working dir. 
+----
+mkdir -p .bp-config/php/php.ini.d/
+cat << EOF > .bp-config/php/php.ini.d/wp-extensions.ini
+extension=mbstring.so
+extension=mysqli.so
+extension=gd.so
+extension=zip.so
+extension=openssl.so
+extension=sockets.so
+EOF
+----
+
+[start=8]
+. we also need to tell the buildpack which php version to use and where our app dir is. we can do this by adding the below file.
+----
+cat << EOF > .bp-config/options.json
+{
+"WEBDIR": "wordpress",
+"PHP_VERSION": "{PHP_73_LATEST}"
+}
+EOF
+----
+
+[start=9]
+. we need to increase the timeout of httpd since some wordpres plugins take a while to install, you maybe also need to increase your IAAS LB timeout. the below snippet was taken from https://github.com/cloudfoundry/php-buildpack/blob/master/defaults/config/httpd/extra/httpd-php.conf[here] and we just add the `ProxyTimeout` to the bottom
+
+----
+mkdir -p .bp-config/httpd/extra/
+cat << 'EOF' > .bp-config/httpd/extra/httpd-php.conf
+DirectoryIndex index.php index.html index.htm
+
+Define fcgi-listener fcgi://#{PHP_FPM_LISTEN}${HOME}/#{WEBDIR}
+
+<Proxy "${fcgi-listener}">
+    # Noop ProxySet directive, disablereuse=On is the default value.
+    # If we don't have a ProxySet, this <Proxy> isn't handled
+    # correctly and everything breaks.
+
+    # NOTE: Setting retry to avoid cached HTTP 503 (See https://www.pivotaltracker.com/story/show/103840940)
+    ProxySet disablereuse=On retry=0
+</Proxy>
+
+<Directory "${HOME}/#{WEBDIR}">
+  <Files *.php>
+      <If "-f %{REQUEST_FILENAME}"> # make sure the file exists so that if not, Apache will show its 404 page and not FPM
+          SetHandler proxy:fcgi://#{PHP_FPM_LISTEN}
+      </If>
+  </Files>
+</Directory>
+# Allow the proxy to wait for up to 895 seconds
+#  this is just short of the default gorouter timeout of 900s
+ProxyTimeout 300
+EOF
+----
+
+[start=9]
+. in order to use the nfs storage we provisioned we will use a script to seed the content.
+
+----
+mv wordpress/wp-content wordpress/wp-content-orig
+
+cat << EOF > .profile 
+#!/bin/bash
+
+# set path of where NFS partition is mounted
+MOUNT_FOLDER="/home/vcap/files"
+
+# set name of folder in which to store files on the NFS partition
+WPCONTENT_FOLDER="$(echo $VCAP_APPLICATION | jq -r .application_name)"
+
+# Does the WPCONTENT_FOLDER exist under MOUNT_FOLDER? If not seed it.
+TARGET="$MOUNT_FOLDER/$WPCONTENT_FOLDER"
+if [ ! -d "$TARGET" ]; then
+echo "First run, moving default WordPress files to the remote volume"
+mv "/home/vcap/app/wordpress/wp-content-orig" "$TARGET"
+ln -s "$TARGET" "/home/vcap/app/wordpress/wp-content"
+
+# Write warning to remote folder
+echo "!! WARNING !! DO NOT EDIT FILES IN THIS DIRECTORY!!" > \
+"$TARGET/WARNING_DO_NOT_EDIT_THIS_DIRECTORY"
+else
+ln -s "$TARGET" "/home/vcap/app/wordpress/wp-content"
+rm -rf "/home/vcap/app/wordpress/wp-content-orig" # we don't need this
+fi
+EOF
+----
+
+[start=10]
+. add the redis plugin to the `wp-content-orig` folder
+
+----
+curl -O https://downloads.wordpress.org/plugin/redis-cache.1.4.1.zip
+unzip redis-cache.1.4.1.zip
+mv redis-cache wordpress/wp-content-orig/plugins/.
+rm redis-cache.1.4.1.zip
+----
+
+----
+// ** get redis propoerties out of the VCAP
+$redis_service = $services['p-redis'][0];
+
+define('WP_REDIS_HOST', $redis_service['credentials']['host']);
+define('WP_REDIS_PORT', $redis_service['credentials']['port']);
+define('WP_REDIS_PASSWORD', $redis_service['credentials']['password']);
+----
+
+
+[start=11]
+. add the redis plugin environment vars to the `wp-config.php` file. 
+
+----
+// ** get redis propoerties out of the VCAP
+$redis_service = $services['p-redis'][0];
+
+define('WP_REDIS_HOST', $redis_service['credentials']['host']);
+define('WP_REDIS_PORT', $redis_service['credentials']['port']);
+define('WP_REDIS_PASSWORD', $redis_service['credentials']['password']);
+----
+
+
+[start=12]
+. push our application to pcf
+
+----
+cf push
+----
+
+
+[start=13]
+
+. go to the plugins page in wp admin and activate the redis pugin and then go to settings and enable object cache
+
+
+$8r2EQXBo6!n
+

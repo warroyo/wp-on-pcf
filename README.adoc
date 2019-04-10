@@ -1,0 +1,5 @@
+= WordPress on PCF
+
+this is a walkthrough of running wordpress on PCF using the AWS service broker(RDS), redis for caching and EFS for file storage.
+
+follow the step by step guid link://docs.adoc[here].
