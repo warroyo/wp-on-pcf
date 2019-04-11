@@ -1,0 +1,16 @@
+= Step by Step Guide to Wordpress on PCF
+
+== PCF requirements
+
+* PCF foundation
+* redis for PCF
+* AWS Service Broker
+
+
+== other requirements
+
+* CF CLI
+
+
+
+== Steps
