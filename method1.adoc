@@ -49,7 +49,7 @@ rm latest.zip
 [start=5]
 . create a manifest file for pcf in your working directory, not in the WP folder
 ----
-cat << EOF > /tmp/yourfilehere
+cat << EOF > manifest.yml
 ---
 applications:
 - name: wordpress
@@ -161,7 +161,7 @@ EOF
 ----
 mv wordpress/wp-content wordpress/wp-content-orig
 
-cat << EOF > .profile 
+cat << 'EOF' > .profile 
 #!/bin/bash
 
 # set path of where NFS partition is mounted
@@ -197,14 +197,6 @@ mv redis-cache wordpress/wp-content-orig/plugins/.
 rm redis-cache.1.4.1.zip
 ----
 
-----
-// ** get redis propoerties out of the VCAP
-$redis_service = $services['p-redis'][0];
-
-define('WP_REDIS_HOST', $redis_service['credentials']['host']);
-define('WP_REDIS_PORT', $redis_service['credentials']['port']);
-define('WP_REDIS_PASSWORD', $redis_service['credentials']['password']);
-----
 
 
 [start=11]
